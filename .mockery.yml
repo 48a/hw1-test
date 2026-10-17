@@ -1,0 +1,14 @@
+# Конфиг mockery v3 — генерация моков для интерфейсов проекта.
+# Запуск: make mocks (или mockery). Документация: https://vektra.github.io/mockery/
+template: testify
+formatter: goimports
+packages:
+  example.com/zoo/internal/zoo:
+    interfaces:
+      Notifier:
+    config:
+      # Мок кладём рядом с интерфейсом, но во внешний тестовый пакет:
+      # в продакшн-сборку он не попадает, тестам доступен.
+      dir: "{{.InterfaceDir}}"
+      filename: "mock_{{.InterfaceName | lower}}_test.go"
+      pkgname: "{{.SrcPackageName}}_test"
