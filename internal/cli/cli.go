@@ -1,8 +1,4 @@
-// Package cli реализует текстовый интерфейс (REPL) зоопарка.
-//
-// Пакет зависит только от internal/zoo и стандартной библиотеки.
-// Ввод и вывод приходят снаружи (io.Reader/io.Writer) — поэтому REPL
-// можно тестировать, подставляя strings.Reader и bytes.Buffer.
+// Package cli реализует пошаговое текстовое меню приложения «ВышКат».
 package cli
 
 import (
@@ -10,105 +6,111 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
-	"example.com/zoo/internal/zoo"
+	"example.com/zoo/internal/domain"
 )
 
-const helpText = `Команды:
-  add-enclosure <название> <вместимость>    создать вольер
-  add-animal <вольер> <имя> <вид> <возраст> добавить животное в вольер
-  list                                      показать зоопарк
-  help                                      эта справка
-  exit                                      выйти`
+const menu = `ВышКат — учёт прокатного парка
+1 — Добавить транспорт
+2 — Добавить вещь
+3 — Отчёт
+4 — Техника для новичков
+5 — Весь инвентарь
+0 — Выход`
 
-// Run запускает цикл «команда — ответ» до команды exit или конца ввода.
-func Run(z *zoo.Zoo, in io.Reader, out io.Writer) error {
-	fmt.Fprintln(out, "Добро пожаловать в зоопарк! Введите help для списка команд.")
-	sc := bufio.NewScanner(in)
+type console struct {
+	scanner *bufio.Scanner
+	out     *bufio.Writer
+	park    *domain.Park
+}
+
+// Run выполняет команды до выхода или конца ввода.
+func Run(park *domain.Park, in io.Reader, out io.Writer) (err error) {
+	c := console{scanner: bufio.NewScanner(in), out: bufio.NewWriter(out), park: park}
+	defer func() { err = errors.Join(err, c.out.Flush()) }()
+	fmt.Fprintln(c.out, menu)
+	err = c.loop()
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
+}
+
+func (c *console) loop() error {
 	for {
-		fmt.Fprint(out, "> ")
-		if !sc.Scan() { // EOF (Ctrl+D) или ошибка чтения — выходим
-			return sc.Err()
-		}
-		done, err := dispatch(z, sc.Text(), out)
+		command, err := c.read("Команда (0–5): ")
 		if err != nil {
-			fmt.Fprintln(out, "Ошибка:", err)
+			return err
 		}
-		if done {
-			fmt.Fprintln(out, "Пока!")
+		if command == "0" {
+			fmt.Fprintln(c.out, "До свидания!")
 			return nil
 		}
-	}
-}
-
-// dispatch разбирает одну строку и выполняет команду.
-// done == true означает «завершить работу».
-func dispatch(z *zoo.Zoo, line string, out io.Writer) (done bool, err error) {
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
-		return false, nil
-	}
-
-	// TODO(ДЗ): новые команды добавляйте сюда — например, remove-animal или feed.
-	switch cmd, args := fields[0], fields[1:]; cmd {
-	case "exit", "quit":
-		return true, nil
-	case "help":
-		fmt.Fprintln(out, helpText)
-	case "add-enclosure":
-		return false, addEnclosure(z, args)
-	case "add-animal":
-		return false, addAnimal(z, args)
-	case "list":
-		printZoo(z, out)
-	default:
-		fmt.Fprintf(out, "Неизвестная команда %q. Введите help.\n", cmd)
-	}
-	return false, nil
-}
-
-func addEnclosure(z *zoo.Zoo, args []string) error {
-	if len(args) != 2 {
-		return errors.New("использование: add-enclosure <название> <вместимость>")
-	}
-	capacity, err := strconv.Atoi(args[1])
-	if err != nil {
-		return fmt.Errorf("вместимость должна быть числом: %w", err)
-	}
-	e, err := zoo.NewEnclosure(args[0], capacity)
-	if err != nil {
-		return err
-	}
-	return z.AddEnclosure(e)
-}
-
-func addAnimal(z *zoo.Zoo, args []string) error {
-	if len(args) != 4 {
-		return errors.New("использование: add-animal <вольер> <имя> <вид> <возраст>")
-	}
-	age, err := strconv.Atoi(args[3])
-	if err != nil {
-		return fmt.Errorf("возраст должен быть числом: %w", err)
-	}
-	a, err := zoo.NewAnimal(args[1], args[2], age)
-	if err != nil {
-		return err
-	}
-	e, err := z.Enclosure(args[0])
-	if err != nil {
-		return err
-	}
-	return e.Add(a)
-}
-
-func printZoo(z *zoo.Zoo, out io.Writer) {
-	fmt.Fprintf(out, "Зоопарк %q:\n", z.Name())
-	for _, e := range z.Enclosures() {
-		fmt.Fprintf(out, "  Вольер %q (%d/%d):\n", e.Name(), len(e.Animals()), e.Capacity())
-		for _, a := range e.Animals() {
-			fmt.Fprintln(out, "   -", a)
+		if err := c.execute(command); err != nil {
+			if c.scanner.Err() != nil || errors.Is(err, io.EOF) {
+				return err
+			}
+			if flushErr := c.out.Flush(); flushErr != nil {
+				return errors.Join(err, flushErr)
+			}
+			fmt.Fprintf(c.out, "Не добавлено: %v. Повторите команду 1 или 2 с корректными данными.\n", err)
 		}
+	}
+}
+
+func (c *console) read(prompt string) (string, error) {
+	fmt.Fprintln(c.out, strings.TrimSpace(prompt))
+	if err := c.out.Flush(); err != nil {
+		return "", err
+	}
+	if !c.scanner.Scan() {
+		if err := c.scanner.Err(); err != nil {
+			return "", err
+		}
+		return "", io.EOF
+	}
+	return strings.TrimSpace(c.scanner.Text()), nil
+}
+
+func (c *console) execute(command string) error {
+	switch command {
+	case "1":
+		return c.addTransport()
+	case "2":
+		return c.addItem()
+	case "3":
+		r := c.park.Report()
+		fmt.Fprintf(c.out, "Транспорт: %d; вещи: %d; всего: %d; Суточная энергия всего баланса: %.2f кВт·ч\n",
+			r.Transport, r.Items, r.Total, r.Energy)
+	case "4":
+		c.printBeginners()
+	case "5":
+		c.printInventory()
+	default:
+		fmt.Fprintln(c.out, "Неизвестная команда. Введите число от 0 до 5.")
+	}
+	return nil
+}
+
+func (c *console) printBeginners() {
+	fmt.Fprintln(c.out, "Техника для новичков (простота >= 6):")
+	transport := c.park.Beginners()
+	if len(transport) == 0 {
+		fmt.Fprintln(c.out, "Список пуст.")
+	}
+	for _, item := range transport {
+		fmt.Fprintf(c.out, "- %s [%s], простота: %d\n", item.Name(), item.InventoryNumber(), item.BeginnerEase())
+	}
+}
+
+func (c *console) printInventory() {
+	fmt.Fprintln(c.out, "Весь инвентарь:")
+	items := c.park.Inventory()
+	if len(items) == 0 {
+		fmt.Fprintln(c.out, "Список пуст.")
+	}
+	for _, item := range items {
+		fmt.Fprintf(c.out, "- %s [%s]\n", item.Name(), item.InventoryNumber())
 	}
 }

@@ -3,9 +3,9 @@
 template: testify
 formatter: goimports
 packages:
-  example.com/zoo/internal/zoo:
+  example.com/zoo/internal/domain:
     interfaces:
-      Notifier:
+      ServiceCenter:
     config:
       # Мок кладём рядом с интерфейсом, но во внешний тестовый пакет:
       # в продакшн-сборку он не попадает, тестам доступен.

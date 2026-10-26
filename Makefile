@@ -2,23 +2,28 @@
 
 .DEFAULT_GOAL := help
 
-BIN := bin/zoo
+BIN := bin/rental
 GOLANGCI_LINT ?= golangci-lint
 
 ## help: показать это сообщение
 .PHONY: help
 help:
-	@echo "Commands"
+	@sed -n 's/^## //p' Makefile
 
 ## run: запустить приложение
 .PHONY: run
 run:
-	go run ./cmd/zoo
+	go run ./cmd/rental
 
-## build: собрать бинарник в bin/zoo
+## demo: показать успешные сценарии и ошибки из docs/demo.txt
+.PHONY: demo
+demo:
+	go run ./cmd/rental < docs/demo.txt
+
+## build: собрать бинарник в bin/rental
 .PHONY: build
 build:
-	go build -o $(BIN) ./cmd/zoo
+	go build -o $(BIN) ./cmd/rental
 
 ## test: запустить тесты
 .PHONY: test
