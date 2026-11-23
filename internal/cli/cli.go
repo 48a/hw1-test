@@ -1,8 +1,4 @@
-// Package cli реализует текстовый интерфейс (REPL) зоопарка.
-//
-// Пакет зависит только от internal/zoo и стандартной библиотеки.
-// Ввод и вывод приходят снаружи (io.Reader/io.Writer) — поэтому REPL
-// можно тестировать, подставляя strings.Reader и bytes.Buffer.
+// Package cli реализует текстовый интерфейс ПОС.
 package cli
 
 import (
@@ -10,105 +6,117 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
+	"os"
 	"strings"
 
-	"example.com/zoo/internal/zoo"
+	"example.com/zoo/internal/app"
+	"example.com/zoo/internal/domain"
 )
 
 const helpText = `Команды:
-  add-enclosure <название> <вместимость>    создать вольер
-  add-animal <вольер> <имя> <вид> <возраст> добавить животное в вольер
-  list                                      показать зоопарк
-  help                                      эта справка
-  exit                                      выйти`
+  student <ID> <имя>                  добавить студента
+  students                           список студентов
+  criterion <ID> <максимум> <вес> <название>
+  criteria                           список критериев
+  grade <студент> <критерий> <балл>    выставить или исправить
+  grades <студент>                    посмотреть оценки
+  ungrade <студент> <критерий>         отменить оценку
+  total <студент> [final]             текущий или окончательный итог
+  summary                            итоги и статистика по группе
+  export <путь.csv>                   записать новый CSV-файл
+  help                               справка
+  exit                               выход`
 
-// Run запускает цикл «команда — ответ» до команды exit или конца ввода.
-func Run(z *zoo.Zoo, in io.Reader, out io.Writer) error {
-	fmt.Fprintln(out, "Добро пожаловать в зоопарк! Введите help для списка команд.")
-	sc := bufio.NewScanner(in)
+var errUsage = errors.New("неверный формат команды")
+
+const unlimited = -1
+
+type command struct {
+	usage            string
+	minimum, maximum int
+	run              func([]string) (string, error)
+}
+
+type console struct{ service *app.Service }
+
+// Run запускает REPL до exit или EOF; ошибки команд не прерывают сеанс.
+func Run(service *app.Service, in io.Reader, out io.Writer) error {
+	if _, err := fmt.Fprintln(out, "ПОС. Данные хранятся до выхода. Введите help."); err != nil {
+		return fmt.Errorf("вывод: %w", err)
+	}
+	commands := console{service: service}.commands()
+	scanner := bufio.NewScanner(in)
 	for {
-		fmt.Fprint(out, "> ")
-		if !sc.Scan() { // EOF (Ctrl+D) или ошибка чтения — выходим
-			return sc.Err()
+		if _, err := fmt.Fprint(out, "> "); err != nil {
+			return fmt.Errorf("вывод: %w", err)
 		}
-		done, err := dispatch(z, sc.Text(), out)
+		if !scanner.Scan() {
+			return scanner.Err()
+		}
+		response, done, err := execute(commands, scanner.Text())
 		if err != nil {
-			fmt.Fprintln(out, "Ошибка:", err)
+			response = fmt.Sprintf("Ошибка: %v. %s", err, hint(err))
+		}
+		if response != "" {
+			if _, err := fmt.Fprintln(out, response); err != nil {
+				return fmt.Errorf("вывод: %w", err)
+			}
 		}
 		if done {
-			fmt.Fprintln(out, "Пока!")
 			return nil
 		}
 	}
 }
 
-// dispatch разбирает одну строку и выполняет команду.
-// done == true означает «завершить работу».
-func dispatch(z *zoo.Zoo, line string, out io.Writer) (done bool, err error) {
+func (c console) commands() map[string]command {
+	return map[string]command{
+		"student":   {"student <ID> <имя>", 2, unlimited, c.student},
+		"students":  {"students", 0, 0, c.students},
+		"criterion": {"criterion <ID> <максимум> <вес> <название>", 4, unlimited, c.criterion},
+		"criteria":  {"criteria", 0, 0, c.criteria},
+		"grade":     {"grade <студент> <критерий> <балл>", 3, 3, c.grade},
+		"grades":    {"grades <студент>", 1, 1, c.grades},
+		"ungrade":   {"ungrade <студент> <критерий>", 2, 2, c.ungrade},
+		"total":     {"total <студент> [final]", 1, 2, c.total},
+		"summary":   {"summary", 0, 0, c.summary},
+		"export":    {"export <путь.csv>", 1, unlimited, c.export},
+		"help":      {"help", 0, 0, func(_ []string) (string, error) { return helpText, nil }},
+	}
+}
+
+func execute(commands map[string]command, line string) (string, bool, error) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
-		return false, nil
+		return "", false, nil
 	}
+	if fields[0] == "exit" && len(fields) == 1 {
+		return "До свидания!", true, nil
+	}
+	cmd, exists := commands[fields[0]]
+	if !exists {
+		return "", false, fmt.Errorf("%w: неизвестная команда %q", errUsage, fields[0])
+	}
+	args := fields[1:]
+	if len(args) < cmd.minimum || (cmd.maximum != unlimited && len(args) > cmd.maximum) {
+		return "", false, fmt.Errorf("%w: %s", errUsage, cmd.usage)
+	}
+	response, err := cmd.run(args)
+	return response, false, err
+}
 
-	// TODO(ДЗ): новые команды добавляйте сюда — например, remove-animal или feed.
-	switch cmd, args := fields[0], fields[1:]; cmd {
-	case "exit", "quit":
-		return true, nil
-	case "help":
-		fmt.Fprintln(out, helpText)
-	case "add-enclosure":
-		return false, addEnclosure(z, args)
-	case "add-animal":
-		return false, addAnimal(z, args)
-	case "list":
-		printZoo(z, out)
+func hint(err error) string {
+	switch {
+	case errors.Is(err, domain.ErrStudentNotFound):
+		return "Проверьте ID командой students."
+	case errors.Is(err, domain.ErrCriterionNotFound), errors.Is(err, domain.ErrInvalidScore):
+		return "Проверьте критерии командой criteria."
+	case errors.Is(err, domain.ErrEmptyRubric):
+		return "Добавьте критерий командой criterion."
+	case errors.Is(err, domain.ErrIncomplete), errors.Is(err, domain.ErrEvaluationNotFound):
+		return "Посмотрите grades и выставьте оценки командой grade."
+	case errors.Is(err, os.ErrExist):
+		return "Укажите новое имя файла."
 	default:
-		fmt.Fprintf(out, "Неизвестная команда %q. Введите help.\n", cmd)
-	}
-	return false, nil
-}
-
-func addEnclosure(z *zoo.Zoo, args []string) error {
-	if len(args) != 2 {
-		return errors.New("использование: add-enclosure <название> <вместимость>")
-	}
-	capacity, err := strconv.Atoi(args[1])
-	if err != nil {
-		return fmt.Errorf("вместимость должна быть числом: %w", err)
-	}
-	e, err := zoo.NewEnclosure(args[0], capacity)
-	if err != nil {
-		return err
-	}
-	return z.AddEnclosure(e)
-}
-
-func addAnimal(z *zoo.Zoo, args []string) error {
-	if len(args) != 4 {
-		return errors.New("использование: add-animal <вольер> <имя> <вид> <возраст>")
-	}
-	age, err := strconv.Atoi(args[3])
-	if err != nil {
-		return fmt.Errorf("возраст должен быть числом: %w", err)
-	}
-	a, err := zoo.NewAnimal(args[1], args[2], age)
-	if err != nil {
-		return err
-	}
-	e, err := z.Enclosure(args[0])
-	if err != nil {
-		return err
-	}
-	return e.Add(a)
-}
-
-func printZoo(z *zoo.Zoo, out io.Writer) {
-	fmt.Fprintf(out, "Зоопарк %q:\n", z.Name())
-	for _, e := range z.Enclosures() {
-		fmt.Fprintf(out, "  Вольер %q (%d/%d):\n", e.Name(), len(e.Animals()), e.Capacity())
-		for _, a := range e.Animals() {
-			fmt.Fprintln(out, "   -", a)
-		}
+		return "Проверьте данные; help — формат команд."
 	}
 }

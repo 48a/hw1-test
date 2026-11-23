@@ -2,23 +2,32 @@
 
 .DEFAULT_GOAL := help
 
-BIN := bin/zoo
+BIN := bin/pos
 GOLANGCI_LINT ?= golangci-lint
 
 ## help: показать это сообщение
 .PHONY: help
 help:
-	@echo "Commands"
+	@echo "run build demo test test-race cover mocks fmt lint vet check"
 
 ## run: запустить приложение
 .PHONY: run
 run:
-	go run ./cmd/zoo
+	go run ./cmd/pos
 
-## build: собрать бинарник в bin/zoo
+## build: собрать бинарник в bin/pos
 .PHONY: build
 build:
-	go build -o $(BIN) ./cmd/zoo
+	go build -o $(BIN) ./cmd/pos
+
+## demo: выполнить сквозной сценарий и показать CSV из временного каталога
+.PHONY: demo
+demo: build
+	@demo_dir=$$(mktemp -d) && \
+	cd "$$demo_dir" && \
+	"$(abspath $(BIN))" < "$(CURDIR)/docs/demo.txt" && \
+	cat results.csv && \
+	printf 'CSV: %s/results.csv\n' "$$demo_dir"
 
 ## test: запустить тесты
 .PHONY: test

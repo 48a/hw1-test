@@ -1,0 +1,16 @@
+AI_USAGE.mdgstudent s1 Анна Иванова
+student s2 Борис Петров
+students
+criterion exam 10 3 Экзамен
+criterion lab 20 1 Практика
+criteria
+grade s1 exam 12
+grade s1 exam 8
+total s1
+total s1 final
+grade s1 lab 20
+grades s1
+total s1 final
+summary
+export results.csv
+exit
